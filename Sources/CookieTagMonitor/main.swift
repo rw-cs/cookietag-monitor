@@ -15,6 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private var lastSeenLabel: NSTextField!
     private var statsLabel: NSTextField!
     private var scanButton: NSButton!
+    private var calibrateButton: NSButton!
     private var central: CBCentralManager!
     private var scanTimer: Timer?
     private var dailyTimer: Timer?
@@ -25,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private let lastSeenKey = "lastSuccessfulScan"
     private let welcomeShownKey = "welcomeShown"
     private let historyKey = "checkHistory"
+    private let referenceRSSIKey = "distanceReferenceRSSI"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -128,7 +130,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         scanButton.bezelStyle = .rounded
         scanButton.keyEquivalent = "\r"
 
-        let stack = NSStackView(views: [title, statusLabel, batteryLabel, lastSeenLabel, statsLabel, schedule, scanButton])
+        calibrateButton = NSButton(title: "Calibrate at 90 cm", target: self, action: #selector(calibrateDistance))
+        calibrateButton.bezelStyle = .rounded
+
+        let buttons = NSStackView(views: [scanButton, calibrateButton])
+        buttons.orientation = .horizontal
+        buttons.spacing = 12
+
+        let stack = NSStackView(views: [title, statusLabel, batteryLabel, lastSeenLabel, statsLabel, schedule, buttons])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
@@ -329,9 +338,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         let sorted = sighting.rssiSamples.sorted()
         let median = Double(sorted[sorted.count / 2])
         // SmartTag2 does not publish a calibrated ranging value to macOS.
-        // -59 dBm at 1 m and a 2.2 indoor path-loss exponent provide a useful
-        // proximity estimate, not a precise measurement.
-        return pow(10.0, (-59.0 - median) / 22.0)
+        // Use the saved reference strength at 1 m with a 2.2 indoor path-loss
+        // exponent. -80 dBm is a closer default for this tag/Mac combination.
+        let reference = defaults.object(forKey: referenceRSSIKey) as? Double ?? -80.0
+        return pow(10.0, (reference - median) / 22.0)
     }
 
     private func formatDistance(_ meters: Double) -> String {
@@ -340,6 +350,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             return "\(Int((bounded * 100).rounded())) cm"
         }
         return String(format: "%.1f m", bounded)
+    }
+
+    @objc private func calibrateDistance() {
+        guard let latest = loadHistory().last(where: { $0.detected && $0.medianRSSI != nil }),
+              let rssi = latest.medianRSSI else {
+            refreshMenu(detail: "Run a successful scan before calibrating")
+            return
+        }
+        let knownDistance = 0.9
+        let referenceAtOneMeter = Double(rssi) + 22.0 * log10(knownDistance)
+        defaults.set(referenceAtOneMeter, forKey: referenceRSSIKey)
+        refreshMenu(detail: "Distance calibrated with Cookie at 90 cm")
+
+        let alert = NSAlert()
+        alert.messageText = "Distance calibrated"
+        alert.informativeText = "The latest signal reading is now treated as 90 cm. Run another scan to see the corrected estimate. Recalibrate whenever the collar or laptop position changes substantially."
+        alert.addButton(withTitle: "Scan Again")
+        alert.addButton(withTitle: "Done")
+        NSApp.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertFirstButtonReturn { startScan() }
     }
 
     private func batteryName(_ raw: Int) -> String {
