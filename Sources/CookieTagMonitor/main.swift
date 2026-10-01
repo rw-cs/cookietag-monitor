@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private var window: NSWindow!
     private var statusLabel: NSTextField!
     private var lastSeenLabel: NSTextField!
+    private var scanButton: NSButton!
     private var central: CBCentralManager!
     private var scanTimer: Timer?
     private var dailyTimer: Timer?
@@ -111,7 +112,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         schedule.textColor = .secondaryLabelColor
         schedule.alignment = .center
 
-        let scanButton = NSButton(title: "Scan Now", target: self, action: #selector(startScan))
+        scanButton = NSButton(title: "Scan Now", target: self, action: #selector(startScan))
         scanButton.bezelStyle = .rounded
         scanButton.keyEquivalent = "\r"
 
@@ -167,10 +168,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             startScan()
         case .unauthorized:
             setIcon("exclamationmark.triangle.fill")
+            scanButton?.isEnabled = true
             notify(title: "Bluetooth permission needed", body: "Allow Bluetooth for CookieTag Monitor in System Settings → Privacy & Security → Bluetooth.")
             refreshMenu(detail: "Bluetooth permission denied")
         case .poweredOff:
             setIcon("exclamationmark.triangle.fill")
+            scanButton?.isEnabled = true
             refreshMenu(detail: "Bluetooth is switched off")
         default:
             refreshMenu(detail: "Waiting for Bluetooth…")
@@ -215,8 +218,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     }
 
     @objc private func startScan() {
-        guard central?.state == .poweredOn, !isScanning else { return }
+        guard let central else {
+            refreshMenu(detail: "Bluetooth scanner is still starting—try again in a moment")
+            return
+        }
+        guard !isScanning else {
+            refreshMenu(detail: "A 45-second scan is already running…")
+            return
+        }
+        guard central.state == .poweredOn else {
+            let message: String
+            switch central.state {
+            case .unauthorized:
+                message = "Bluetooth permission denied—enable it in System Settings"
+            case .poweredOff:
+                message = "Bluetooth is switched off"
+            case .unsupported:
+                message = "Bluetooth Low Energy is not supported on this Mac"
+            default:
+                message = "Bluetooth is not ready—try again in a moment"
+            }
+            refreshMenu(detail: message)
+            return
+        }
         isScanning = true
+        scanButton?.title = "Scanning…"
+        scanButton?.isEnabled = false
         sightings.removeAll()
         setIcon("dot.radiowaves.left.and.right")
         refreshMenu(detail: "Scanning for Cookie’s SmartTag2…")
@@ -230,6 +257,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private func finishScan() {
         central.stopScan()
         isScanning = false
+        scanButton?.title = "Scan Again"
+        scanButton?.isEnabled = true
 
         let credible = sightings.values.filter { $0.count >= 2 }
         if credible.isEmpty {
