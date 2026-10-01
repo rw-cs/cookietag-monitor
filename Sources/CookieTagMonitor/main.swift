@@ -1,5 +1,6 @@
 import AppKit
 import CoreBluetooth
+import Security
 import ServiceManagement
 import UserNotifications
 
@@ -16,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private var statsLabel: NSTextField!
     private var scanButton: NSButton!
     private var calibrateButton: NSButton!
+    private var smartThingsButton: NSButton!
     private var central: CBCentralManager!
     private var scanTimer: Timer?
     private var dailyTimer: Timer?
@@ -133,7 +135,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         calibrateButton = NSButton(title: "Calibrate at 90 cm", target: self, action: #selector(calibrateDistance))
         calibrateButton.bezelStyle = .rounded
 
-        let buttons = NSStackView(views: [scanButton, calibrateButton])
+        smartThingsButton = NSButton(title: "Connect SmartThings", target: self, action: #selector(connectSmartThings))
+        smartThingsButton.bezelStyle = .rounded
+
+        let buttons = NSStackView(views: [scanButton, calibrateButton, smartThingsButton])
         buttons.orientation = .horizontal
         buttons.spacing = 12
 
@@ -370,6 +375,108 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         alert.addButton(withTitle: "Done")
         NSApp.activate(ignoringOtherApps: true)
         if alert.runModal() == .alertFirstButtonReturn { startScan() }
+    }
+
+    @objc private func connectSmartThings() {
+        let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        field.placeholderString = "Paste the 24-hour SmartThings token"
+        let alert = NSAlert()
+        alert.messageText = "Connect SmartThings"
+        alert.informativeText = "The token is stored in your Mac’s Keychain and sent only to api.smartthings.com."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Connect")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let token = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !token.isEmpty else {
+            refreshMenu(detail: "No SmartThings token entered")
+            return
+        }
+        saveTokenToKeychain(token)
+        testSmartThings(token: token)
+    }
+
+    private func saveTokenToKeychain(_ token: String) {
+        let service = "local.cookie.tagmonitor.smartthings"
+        let account = "SmartThingsPAT"
+        let base: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: account
+        ]
+        SecItemDelete(base as CFDictionary)
+        var add = base
+        add[kSecValueData as String] = Data(token.utf8)
+        SecItemAdd(add as CFDictionary, nil)
+    }
+
+    private func testSmartThings(token: String) {
+        smartThingsButton.isEnabled = false
+        smartThingsButton.title = "Checking…"
+        refreshMenu(detail: "Checking SmartThings for CookieTag…")
+        var request = URLRequest(url: URL(string: "https://api.smartthings.com/v1/devices?includeStatus=true&includeHealth=true")!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.smartThingsButton.isEnabled = true
+                self.smartThingsButton.title = "Connect SmartThings"
+                guard let http = response as? HTTPURLResponse, let data else {
+                    self.showSmartThingsResult("Connection failed: \(error?.localizedDescription ?? "no response")")
+                    return
+                }
+                guard http.statusCode == 200 else {
+                    self.showSmartThingsResult(http.statusCode == 401 ? "Token rejected or expired. Generate a new token with Devices read permission." : "SmartThings returned HTTP \(http.statusCode).")
+                    return
+                }
+                self.inspectSmartThingsDevices(data)
+            }
+        }.resume()
+    }
+
+    private func inspectSmartThingsDevices(_ data: Data) {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let items = root["items"] as? [[String: Any]] else {
+            showSmartThingsResult("SmartThings responded, but the device list format was unexpected.")
+            return
+        }
+        let candidates = items.filter { device in
+            let text = ["label", "name", "deviceTypeName", "deviceModel"]
+                .compactMap { device[$0] as? String }.joined(separator: " ").lowercased()
+            return text.contains("cookie") || text.contains("tag") || text.contains("tracker")
+        }
+        guard !candidates.isEmpty else {
+            showSmartThingsResult("Connected successfully and found \(items.count) devices, but Samsung did not expose CookieTag/SmartTag through the public device list.")
+            return
+        }
+        let lines = candidates.map { device -> String in
+            let name = (device["label"] as? String) ?? (device["name"] as? String) ?? "Unnamed tag"
+            let id = (device["deviceId"] as? String) ?? "ID unavailable"
+            let statusText = String(describing: device["status"] ?? "")
+            let battery = extractBattery(from: statusText) ?? "not exposed"
+            return "\(name)\nStable ID: \(id)\nBattery: \(battery)"
+        }
+        showSmartThingsResult("Found \(candidates.count) likely tracker\(candidates.count == 1 ? "" : "s"):\n\n\(lines.joined(separator: "\n\n"))")
+    }
+
+    private func extractBattery(from text: String) -> String? {
+        let pattern = #"(?i)battery[^0-9A-Za-z]{0,30}(FULL|MEDIUM|LOW|VERY_LOW|[0-9]{1,3})"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let range = Range(match.range(at: 1), in: text) else { return nil }
+        return String(text[range])
+    }
+
+    private func showSmartThingsResult(_ message: String) {
+        refreshMenu(detail: "SmartThings check complete")
+        let alert = NSAlert()
+        alert.messageText = "SmartThings API result"
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.runModal()
     }
 
     private func batteryName(_ raw: Int) -> String {

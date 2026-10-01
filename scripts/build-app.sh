@@ -23,6 +23,7 @@ CLANG_MODULE_CACHE_PATH="$cache_dir" swiftc \
     -o "$build_dir/CookieTagMonitor" \
     -framework AppKit \
     -framework CoreBluetooth \
+    -framework Security \
     -framework ServiceManagement \
     -framework UserNotifications
 
