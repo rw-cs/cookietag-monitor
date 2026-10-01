@@ -7,7 +7,6 @@ private let samsungFindUUID = CBUUID(string: "FD5A")
 private let scanDuration: TimeInterval = 45
 private let scheduledHour = 11
 
-@main
 final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
@@ -366,3 +365,8 @@ private struct Sighting {
     var strongestRSSI: Int
     var rssiSamples: [Int]
 }
+
+let application = NSApplication.shared
+let applicationDelegate = AppDelegate()
+application.delegate = applicationDelegate
+application.run()

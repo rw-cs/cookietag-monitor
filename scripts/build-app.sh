@@ -17,7 +17,6 @@ cd "$project_dir"
 mkdir -p "$build_dir" "$cache_dir"
 CLANG_MODULE_CACHE_PATH="$cache_dir" swiftc \
     -O \
-    -parse-as-library \
     -sdk "$sdk_path" \
     -target "$(uname -m)-apple-macosx13.0" \
     Sources/CookieTagMonitor/main.swift \
