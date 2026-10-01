@@ -20,7 +20,7 @@ The app stays in the menu bar, scans at launch, and checks every day at **11:00 
 
 During a scan, the 🐶 menu-bar label shows the estimated distance to the nearest Samsung tracker. This is a rough BLE signal-strength estimate rather than precise ranging; Cookie’s body, walls, furniture, and tag orientation can change it substantially. For a personalized estimate, place Cookie 90 cm from the Mac after a successful scan and click **Calibrate at 90 cm**, then scan again.
 
-The dashboard also decodes the SmartTag battery state advertised over BLE (`Full`, `Medium`, `Low`, or `Very low`), keeps the most recent 90 check records locally, and summarizes the last seven checks. A low or very-low reading triggers an immediate CR2032 replacement warning. Samsung exposes a four-level state rather than a precise percentage.
+The dashboard also decodes the SmartTag battery state advertised over BLE (`Full`, `Medium`, `Low`, or `Very low`), keeps the most recent 90 check records locally, and summarizes the last seven checks. A `Medium`, `Low`, or `Very low` reading triggers a visible notification and three audible warning tones. `Medium` is treated conservatively as the closest available proxy for 50% capacity. Samsung exposes no precise percentage, and a battery can fail while SmartThings still reports it as sufficient. A completely missing response triggers the same audible warning.
 
 ## Important limitation
 

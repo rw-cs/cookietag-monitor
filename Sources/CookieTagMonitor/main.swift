@@ -303,6 +303,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             saveRecord(CheckRecord(date: Date(), detected: false, batteryRaw: nil, medianRSSI: nil))
             setIcon("exclamationmark.triangle.fill")
             refreshMenu(detail: "No SmartTag2 response found")
+            playWarningSound()
             notify(
                 title: "Check Cookie’s SmartTag2",
                 body: "No Samsung tracker signal was detected during today’s 45-second check. Check the CR2032 battery and keep Cookie near the Mac for another scan."
@@ -328,10 +329,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
                 body: "More than one Samsung tracker was nearby, so the Mac cannot prove which one was Cookie’s."
             )
         }
-        if let battery, battery <= 1 {
+        if let battery, battery <= 2 {
+            playWarningSound()
             notify(
-                title: battery == 0 ? "Cookie’s SmartTag2 battery is very low" : "Cookie’s SmartTag2 battery is low",
-                body: "Replace the CR2032 battery soon. The tag is still transmitting, but it may stop without further warning."
+                title: battery <= 1 ? "CookieTag2 battery is low" : "CookieTag2 battery may be below 50%",
+                body: "Replace the CR2032 proactively. Samsung reports only coarse battery states, and a tag can fail while SmartThings still says sufficient."
             )
         }
     }
@@ -500,6 +502,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         }
         batteryLabel?.stringValue = "Battery: \(batteryName(raw))"
         batteryLabel?.textColor = raw <= 1 ? .systemRed : (raw == 2 ? .systemOrange : .systemGreen)
+    }
+
+    private func playWarningSound() {
+        for delay in [0.0, 0.65, 1.3] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                if let sound = NSSound(named: NSSound.Name("Basso")) {
+                    sound.play()
+                } else {
+                    NSSound.beep()
+                }
+            }
+        }
     }
 
     private func loadHistory() -> [CheckRecord] {
