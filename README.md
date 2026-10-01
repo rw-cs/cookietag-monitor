@@ -1,6 +1,6 @@
 # CookieTag Monitor
 
-A small macOS menu-bar app that checks once a day whether a nearby Samsung Galaxy SmartTag2 is still transmitting. It warns you when no response is heard, which can catch a dead CR2032 battery while Cookie is safely beside the laptop.
+A small macOS app with a dashboard and menu-bar indicator that checks once a day whether a nearby Samsung Galaxy SmartTag2 is still transmitting. It warns you when no response is heard, which can catch a dead CR2032 battery while Cookie is safely beside the laptop.
 
 ## Install
 

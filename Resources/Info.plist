@@ -12,7 +12,7 @@
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundleVersion</key><string>1</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
-    <key>LSUIElement</key><true/>
+    <key>LSUIElement</key><false/>
     <key>NSBluetoothAlwaysUsageDescription</key><string>CookieTag Monitor scans for Cookie’s nearby Samsung SmartTag2 once a day to warn when its battery may have stopped working.</string>
     <key>NSUserNotificationAlertStyle</key><string>alert</string>
 </dict>

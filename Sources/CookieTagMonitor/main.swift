@@ -10,6 +10,9 @@ private let scheduledHour = 11
 @main
 final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, UNUserNotificationCenterDelegate {
     private var statusItem: NSStatusItem!
+    private var window: NSWindow!
+    private var statusLabel: NSTextField!
+    private var lastSeenLabel: NSTextField!
     private var central: CBCentralManager!
     private var scanTimer: Timer?
     private var dailyTimer: Timer?
@@ -21,14 +24,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private let welcomeShownKey = "welcomeShown"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
         configureMenuBar()
+        configureWindow()
         configureNotifications()
         configureLaunchAtLogin()
         central = CBCentralManager(delegate: self, queue: .main)
         scheduleNextDailyScan()
         refreshMenu()
         showWelcomeIfNeeded()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        showWindow()
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
     }
 
     private func configureLaunchAtLogin() {
@@ -71,6 +84,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         statusItem.button?.toolTip = "Cookie SmartTag monitor"
     }
 
+    private func configureWindow() {
+        window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
+            styleMask: [.titled, .closable, .miniaturizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = "CookieTag Monitor"
+        window.center()
+        window.isReleasedWhenClosed = false
+
+        let title = NSTextField(labelWithString: "🐶  Cookie’s SmartTag2")
+        title.font = .systemFont(ofSize: 26, weight: .bold)
+        title.alignment = .center
+
+        statusLabel = NSTextField(labelWithString: "Preparing Bluetooth scanner…")
+        statusLabel.font = .systemFont(ofSize: 17, weight: .medium)
+        statusLabel.alignment = .center
+        statusLabel.maximumNumberOfLines = 2
+
+        lastSeenLabel = NSTextField(labelWithString: "No successful response yet")
+        lastSeenLabel.textColor = .secondaryLabelColor
+        lastSeenLabel.alignment = .center
+
+        let schedule = NSTextField(labelWithString: "Automatic check every day at 11:00 AM")
+        schedule.textColor = .secondaryLabelColor
+        schedule.alignment = .center
+
+        let scanButton = NSButton(title: "Scan Now", target: self, action: #selector(startScan))
+        scanButton.bezelStyle = .rounded
+        scanButton.keyEquivalent = "\r"
+
+        let stack = NSStackView(views: [title, statusLabel, lastSeenLabel, schedule, scanButton])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 18
+        stack.translatesAutoresizingMaskIntoConstraints = false
+
+        let content = NSView()
+        content.addSubview(stack)
+        window.contentView = content
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(greaterThanOrEqualTo: content.leadingAnchor, constant: 28),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: content.trailingAnchor, constant: -28),
+            stack.centerXAnchor.constraint(equalTo: content.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: content.centerYAnchor),
+            statusLabel.widthAnchor.constraint(equalToConstant: 390)
+        ])
+        showWindow()
+    }
+
+    @objc private func showWindow() {
+        window?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
     private func showWelcomeIfNeeded() {
         guard !defaults.bool(forKey: welcomeShownKey) else { return }
         defaults.set(true, forKey: welcomeShownKey)
@@ -82,6 +151,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
             alert.runModal()
+            self?.showWindow()
             self?.refreshMenu()
         }
     }
@@ -211,8 +281,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     }
 
     private func refreshMenu(detail: String? = nil) {
+        let summary = detail ?? currentSummary()
+        statusLabel?.stringValue = summary
+        if let lastSeen = defaults.object(forKey: lastSeenKey) as? Date {
+            let formatter = DateFormatter()
+            formatter.dateStyle = .medium
+            formatter.timeStyle = .short
+            lastSeenLabel?.stringValue = "Last response: \(formatter.string(from: lastSeen))"
+        }
+
         let menu = NSMenu()
-        let state = NSMenuItem(title: detail ?? currentSummary(), action: nil, keyEquivalent: "")
+        let state = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
         state.isEnabled = false
         menu.addItem(state)
 
@@ -230,6 +309,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         }
 
         menu.addItem(.separator())
+        let open = NSMenuItem(title: "Open CookieTag Monitor", action: #selector(showWindow), keyEquivalent: "o")
+        open.target = self
+        menu.addItem(open)
         let scan = NSMenuItem(title: isScanning ? "Scanning…" : "Scan now", action: #selector(startScan), keyEquivalent: "r")
         scan.target = self
         scan.isEnabled = !isScanning && central?.state == .poweredOn
