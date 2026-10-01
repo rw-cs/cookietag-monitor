@@ -20,6 +20,8 @@ The app stays in the menu bar, scans at launch, and checks every day at **11:00 
 
 During a scan, the 🐶 menu-bar label shows the estimated distance to the nearest Samsung tracker. This is a rough BLE signal-strength estimate rather than precise ranging; Cookie’s body, walls, furniture, and tag orientation can change it substantially.
 
+The dashboard also decodes the SmartTag battery state advertised over BLE (`Full`, `Medium`, `Low`, or `Very low`), keeps the most recent 90 check records locally, and summarizes the last seven checks. A low or very-low reading triggers an immediate CR2032 replacement warning. Samsung exposes a four-level state rather than a precise percentage.
+
 ## Important limitation
 
 Samsung SmartTag2 rotates its BLE privacy identity. A Mac can recognize the Samsung Find Network advertisement (`FD5A`), but cannot reliably bind that changing signal to one physical tag. If another Samsung tracker is nearby, the app will warn that the result is ambiguous. For the most dependable daily check, have Cookie beside the Mac and keep other Samsung tags away for the 45-second scan.

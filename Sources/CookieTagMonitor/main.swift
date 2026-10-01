@@ -11,7 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private var statusItem: NSStatusItem!
     private var window: NSWindow!
     private var statusLabel: NSTextField!
+    private var batteryLabel: NSTextField!
     private var lastSeenLabel: NSTextField!
+    private var statsLabel: NSTextField!
     private var scanButton: NSButton!
     private var central: CBCentralManager!
     private var scanTimer: Timer?
@@ -22,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private let defaults = UserDefaults.standard
     private let lastSeenKey = "lastSuccessfulScan"
     private let welcomeShownKey = "welcomeShown"
+    private let historyKey = "checkHistory"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -86,7 +89,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
 
     private func configureWindow() {
         window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 460, height: 300),
+            contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
             styleMask: [.titled, .closable, .miniaturizable],
             backing: .buffered,
             defer: false
@@ -104,6 +107,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         statusLabel.alignment = .center
         statusLabel.maximumNumberOfLines = 2
 
+        batteryLabel = NSTextField(labelWithString: "Battery: waiting for a reading")
+        batteryLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        batteryLabel.alignment = .center
+
         lastSeenLabel = NSTextField(labelWithString: "No successful response yet")
         lastSeenLabel.textColor = .secondaryLabelColor
         lastSeenLabel.alignment = .center
@@ -112,11 +119,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         schedule.textColor = .secondaryLabelColor
         schedule.alignment = .center
 
+        statsLabel = NSTextField(labelWithString: "No check history yet")
+        statsLabel.textColor = .secondaryLabelColor
+        statsLabel.alignment = .center
+        statsLabel.maximumNumberOfLines = 3
+
         scanButton = NSButton(title: "Scan Now", target: self, action: #selector(startScan))
         scanButton.bezelStyle = .rounded
         scanButton.keyEquivalent = "\r"
 
-        let stack = NSStackView(views: [title, statusLabel, lastSeenLabel, schedule, scanButton])
+        let stack = NSStackView(views: [title, statusLabel, batteryLabel, lastSeenLabel, statsLabel, schedule, scanButton])
         stack.orientation = .vertical
         stack.alignment = .centerX
         stack.spacing = 18
@@ -193,9 +205,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             existing.count += 1
             existing.strongestRSSI = max(existing.strongestRSSI, rssi)
             existing.rssiSamples.append(rssi)
+            if let battery = batteryLevel(from: advertisementData) { existing.batteryLevels.append(battery) }
             sightings[id] = existing
         } else {
-            sightings[id] = Sighting(count: 1, strongestRSSI: rssi, rssiSamples: [rssi])
+            let battery = batteryLevel(from: advertisementData).map { [$0] } ?? []
+            sightings[id] = Sighting(count: 1, strongestRSSI: rssi, rssiSamples: [rssi], batteryLevels: battery)
         }
         let nearest = sightings.values.min { estimatedDistance(for: $0) < estimatedDistance(for: $1) }
         if let nearest {
@@ -215,6 +229,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             return true
         }
         return false
+    }
+
+    private func batteryLevel(from advertisement: [String: Any]) -> Int? {
+        guard let serviceData = advertisement[CBAdvertisementDataServiceDataKey] as? [CBUUID: Data],
+              let payload = serviceData.first(where: { $0.key == samsungFindUUID })?.value,
+              payload.count >= 13 else { return nil }
+        // Samsung Offline Finding payload byte 12 uses bits 6–7 for its
+        // four-level battery state: very low, low, medium, or full.
+        return Int((payload[12] >> 6) & 0x03)
     }
 
     @objc private func startScan() {
@@ -262,6 +285,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
 
         let credible = sightings.values.filter { $0.count >= 2 }
         if credible.isEmpty {
+            saveRecord(CheckRecord(date: Date(), detected: false, batteryRaw: nil, medianRSSI: nil))
             setIcon("exclamationmark.triangle.fill")
             refreshMenu(detail: "No SmartTag2 response found")
             notify(
@@ -277,12 +301,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         let strongest = credible.map(\.strongestRSSI).max() ?? -127
         let nearest = credible.min { estimatedDistance(for: $0) < estimatedDistance(for: $1) }!
         let distance = formatDistance(estimatedDistance(for: nearest))
+        let battery = nearest.batteryLevels.sorted().dropFirst(nearest.batteryLevels.count / 2).first
+        let medianRSSI = nearest.rssiSamples.sorted()[nearest.rssiSamples.count / 2]
+        saveRecord(CheckRecord(date: now, detected: true, batteryRaw: battery, medianRSSI: medianRSSI))
+        updateBatteryDisplay(battery)
         statusItem.button?.title = "🐶 \(distance)"
         refreshMenu(detail: "Healthy — nearest tag about \(distance) away (\(strongest) dBm)")
         if credible.count > 1 {
             notify(
                 title: "CookieTag check passed with a caveat",
                 body: "More than one Samsung tracker was nearby, so the Mac cannot prove which one was Cookie’s."
+            )
+        }
+        if let battery, battery <= 1 {
+            notify(
+                title: battery == 0 ? "Cookie’s SmartTag2 battery is very low" : "Cookie’s SmartTag2 battery is low",
+                body: "Replace the CR2032 battery soon. The tag is still transmitting, but it may stop without further warning."
             )
         }
     }
@@ -308,6 +342,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         return String(format: "%.1f m", bounded)
     }
 
+    private func batteryName(_ raw: Int) -> String {
+        switch raw {
+        case 0: return "Very low"
+        case 1: return "Low"
+        case 2: return "Medium"
+        case 3: return "Full"
+        default: return "Unknown"
+        }
+    }
+
+    private func updateBatteryDisplay(_ raw: Int?) {
+        guard let raw else {
+            batteryLabel?.stringValue = "Battery: not included in this signal"
+            batteryLabel?.textColor = .secondaryLabelColor
+            return
+        }
+        batteryLabel?.stringValue = "Battery: \(batteryName(raw))"
+        batteryLabel?.textColor = raw <= 1 ? .systemRed : (raw == 2 ? .systemOrange : .systemGreen)
+    }
+
+    private func loadHistory() -> [CheckRecord] {
+        guard let data = defaults.data(forKey: historyKey) else { return [] }
+        return (try? JSONDecoder().decode([CheckRecord].self, from: data)) ?? []
+    }
+
+    private func saveRecord(_ record: CheckRecord) {
+        var history = loadHistory()
+        history.append(record)
+        history = Array(history.suffix(90))
+        if let data = try? JSONEncoder().encode(history) { defaults.set(data, forKey: historyKey) }
+    }
+
+    private func refreshStats() {
+        let recent = Array(loadHistory().suffix(7))
+        guard !recent.isEmpty else {
+            statsLabel?.stringValue = "No check history yet"
+            return
+        }
+        let detected = recent.filter(\.detected)
+        let levels = detected.compactMap(\.batteryRaw)
+        let batteryTrend: String
+        if let first = levels.first, let last = levels.last, last < first {
+            batteryTrend = "Battery trend: falling"
+        } else if let last = levels.last {
+            batteryTrend = "Battery trend: stable at \(batteryName(last).lowercased())"
+        } else {
+            batteryTrend = "Battery trend: awaiting readings"
+        }
+        statsLabel?.stringValue = "Last \(recent.count) checks: \(detected.count) detected\n\(batteryTrend)"
+    }
+
     private func refreshMenu(detail: String? = nil) {
         let summary = detail ?? currentSummary()
         statusLabel?.stringValue = summary
@@ -317,6 +402,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             formatter.timeStyle = .short
             lastSeenLabel?.stringValue = "Last response: \(formatter.string(from: lastSeen))"
         }
+        refreshStats()
 
         let menu = NSMenu()
         let state = NSMenuItem(title: summary, action: nil, keyEquivalent: "")
@@ -393,6 +479,14 @@ private struct Sighting {
     var count: Int
     var strongestRSSI: Int
     var rssiSamples: [Int]
+    var batteryLevels: [Int]
+}
+
+private struct CheckRecord: Codable {
+    let date: Date
+    let detected: Bool
+    let batteryRaw: Int?
+    let medianRSSI: Int?
 }
 
 let application = NSApplication.shared
