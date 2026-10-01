@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private let welcomeShownKey = "welcomeShown"
     private let historyKey = "checkHistory"
     private let referenceRSSIKey = "distanceReferenceRSSI"
+    private let smartThingsDeviceIDKey = "smartThingsCookieTag2DeviceID"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -443,13 +444,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             return
         }
         let candidates = items.filter { device in
-            let text = ["label", "name", "deviceTypeName", "deviceModel"]
-                .compactMap { device[$0] as? String }.joined(separator: " ").lowercased()
-            return text.contains("cookie") || text.contains("tag") || text.contains("tracker")
+            let names = [device["label"] as? String, device["name"] as? String].compactMap { $0 }
+            return names.contains { $0.compare("CookieTag2", options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
         }
         guard !candidates.isEmpty else {
-            showSmartThingsResult("Connected successfully and found \(items.count) devices, but Samsung did not expose CookieTag/SmartTag through the public device list.")
+            showSmartThingsResult("Connected successfully and found \(items.count) devices, but no device named exactly CookieTag2 was exposed through the public device list. The old CookieTag record was intentionally ignored.")
             return
+        }
+        if let deviceID = candidates.first?["deviceId"] as? String {
+            defaults.set(deviceID, forKey: smartThingsDeviceIDKey)
         }
         let lines = candidates.map { device -> String in
             let name = (device["label"] as? String) ?? (device["name"] as? String) ?? "Unnamed tag"
@@ -458,7 +461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             let battery = extractBattery(from: statusText) ?? "not exposed"
             return "\(name)\nStable ID: \(id)\nBattery: \(battery)"
         }
-        showSmartThingsResult("Found \(candidates.count) likely tracker\(candidates.count == 1 ? "" : "s"):\n\n\(lines.joined(separator: "\n\n"))")
+        showSmartThingsResult("Found CookieTag2 and ignored the old CookieTag record:\n\n\(lines.joined(separator: "\n\n"))\n\nThe stable ID has been saved for future checks.")
     }
 
     private func extractBattery(from text: String) -> String? {
