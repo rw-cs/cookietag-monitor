@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     private var scanTimer: Timer?
     private var dailyTimer: Timer?
     private var sightings: [UUID: Sighting] = [:]
+    private var totalBLEDevicesSeen: Set<UUID> = []
     private var isScanning = false
 
     private let defaults = UserDefaults.standard
@@ -138,6 +139,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
 
         smartThingsButton = NSButton(title: "Connect SmartThings", target: self, action: #selector(connectSmartThings))
         smartThingsButton.bezelStyle = .rounded
+        if loadTokenFromKeychain() != nil { smartThingsButton.title = "Refresh SmartThings" }
 
         let buttons = NSStackView(views: [scanButton, calibrateButton, smartThingsButton])
         buttons.orientation = .horizontal
@@ -213,6 +215,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         advertisementData: [String: Any],
         rssi RSSI: NSNumber
     ) {
+        totalBLEDevicesSeen.insert(peripheral.identifier)
         guard isSamsungFindAdvertisement(advertisementData) else { return }
         let id = peripheral.identifier
         let rssi = RSSI.intValue
@@ -242,6 +245,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         if let uuids = data[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID],
            uuids.contains(where: { $0 == samsungFindUUID }) {
             return true
+        }
+        if let uuids = data[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID],
+           uuids.contains(where: { $0 == samsungFindUUID }) {
+            return true
+        }
+        if let uuids = data[CBAdvertisementDataSolicitedServiceUUIDsKey] as? [CBUUID],
+           uuids.contains(where: { $0 == samsungFindUUID }) {
+            return true
+        }
+        if let name = data[CBAdvertisementDataLocalNameKey] as? String {
+            let normalized = name.lowercased().replacingOccurrences(of: "_", with: "").replacingOccurrences(of: "-", with: "").replacingOccurrences(of: " ", with: "")
+            if normalized == "smarttag" || normalized == "smarttag2" || normalized == "galaxysmarttag" { return true }
         }
         return false
     }
@@ -283,6 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         scanButton?.title = "Scanning…"
         scanButton?.isEnabled = false
         sightings.removeAll()
+        totalBLEDevicesSeen.removeAll()
         setIcon("dot.radiowaves.left.and.right")
         refreshMenu(detail: "Scanning for Cookie’s SmartTag2…")
         central.scanForPeripherals(withServices: nil, options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
@@ -302,7 +318,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         if credible.isEmpty {
             saveRecord(CheckRecord(date: Date(), detected: false, batteryRaw: nil, medianRSSI: nil))
             setIcon("exclamationmark.triangle.fill")
-            refreshMenu(detail: "No SmartTag2 response found")
+            refreshMenu(detail: "No SmartTag2 found (\(totalBLEDevicesSeen.count) other BLE devices seen)")
             playWarningSound()
             notify(
                 title: "Check Cookie’s SmartTag2",
@@ -381,6 +397,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
     }
 
     @objc private func connectSmartThings() {
+        if let savedToken = loadTokenFromKeychain() {
+            testSmartThings(token: savedToken)
+            return
+        }
         let field = NSSecureTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
         field.placeholderString = "Paste the 24-hour SmartThings token"
         let alert = NSAlert()
@@ -414,6 +434,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         SecItemAdd(add as CFDictionary, nil)
     }
 
+    private func loadTokenFromKeychain() -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "local.cookie.tagmonitor.smartthings",
+            kSecAttrAccount as String: "SmartThingsPAT",
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private func deleteTokenFromKeychain() {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "local.cookie.tagmonitor.smartthings",
+            kSecAttrAccount as String: "SmartThingsPAT"
+        ]
+        SecItemDelete(query as CFDictionary)
+    }
+
     private func testSmartThings(token: String) {
         smartThingsButton.isEnabled = false
         smartThingsButton.title = "Checking…"
@@ -425,21 +468,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.smartThingsButton.isEnabled = true
-                self.smartThingsButton.title = "Connect SmartThings"
+                self.smartThingsButton.title = self.loadTokenFromKeychain() == nil ? "Connect SmartThings" : "Refresh SmartThings"
                 guard let http = response as? HTTPURLResponse, let data else {
                     self.showSmartThingsResult("Connection failed: \(error?.localizedDescription ?? "no response")")
                     return
                 }
                 guard http.statusCode == 200 else {
-                    self.showSmartThingsResult(http.statusCode == 401 ? "Token rejected or expired. Generate a new token with Devices read permission." : "SmartThings returned HTTP \(http.statusCode).")
+                    if http.statusCode == 401 {
+                        self.deleteTokenFromKeychain()
+                        self.smartThingsButton.title = "Connect SmartThings"
+                    }
+                    self.showSmartThingsResult(http.statusCode == 401 ? "Token rejected or expired and was removed from Keychain. Generate a new token with Devices read permission, then click Connect SmartThings again." : "SmartThings returned HTTP \(http.statusCode).")
                     return
                 }
-                self.inspectSmartThingsDevices(data)
+                self.inspectSmartThingsDevices(data, token: token)
             }
         }.resume()
     }
 
-    private func inspectSmartThingsDevices(_ data: Data) {
+    private func inspectSmartThingsDevices(_ data: Data, token: String) {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let items = root["items"] as? [[String: Any]] else {
             showSmartThingsResult("SmartThings responded, but the device list format was unexpected.")
@@ -456,14 +503,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         if let deviceID = candidates.first?["deviceId"] as? String {
             defaults.set(deviceID, forKey: smartThingsDeviceIDKey)
         }
-        let lines = candidates.map { device -> String in
-            let name = (device["label"] as? String) ?? (device["name"] as? String) ?? "Unnamed tag"
-            let id = (device["deviceId"] as? String) ?? "ID unavailable"
-            let statusText = String(describing: device["status"] ?? "")
-            let battery = extractBattery(from: statusText) ?? "not exposed"
-            return "\(name)\nStable ID: \(id)\nBattery: \(battery)"
+        guard let device = candidates.first,
+              let id = device["deviceId"] as? String else {
+            showSmartThingsResult("CookieTag2 was listed, but Samsung returned no device ID.")
+            return
         }
-        showSmartThingsResult("Found CookieTag2 and ignored the old CookieTag record:\n\n\(lines.joined(separator: "\n\n"))\n\nThe stable ID has been saved for future checks.")
+        fetchSmartThingsDetails(device: device, deviceID: id, token: token)
+    }
+
+    private func fetchSmartThingsDetails(device: [String: Any], deviceID: String, token: String) {
+        let urls = [
+            URL(string: "https://api.smartthings.com/v1/devices/\(deviceID)/status")!,
+            URL(string: "https://api.smartthings.com/v1/devices/\(deviceID)/health")!
+        ]
+        let group = DispatchGroup()
+        let lock = NSLock()
+        var results: [[String: Any]] = []
+        for url in urls {
+            group.enter()
+            var request = URLRequest(url: url)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            URLSession.shared.dataTask(with: request) { data, response, _ in
+                defer { group.leave() }
+                guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+                      let data, let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                lock.lock(); results.append(json); lock.unlock()
+            }.resume()
+        }
+        group.notify(queue: .main) { [weak self] in
+            guard let self else { return }
+            let name = (device["label"] as? String) ?? (device["name"] as? String) ?? "CookieTag2"
+            let model = (device["deviceModel"] as? String) ?? (device["deviceTypeName"] as? String) ?? "not exposed"
+            let manufacturer = (device["manufacturerName"] as? String) ?? "not exposed"
+            let combined = results.map(String.init(describing:)).joined(separator: " ")
+            let battery = self.extractBattery(from: combined) ?? "not exposed"
+            let health = combined.localizedCaseInsensitiveContains("ONLINE") ? "Online" : (combined.localizedCaseInsensitiveContains("OFFLINE") ? "Offline" : "not exposed")
+            self.showSmartThingsResult("\(name)\nStable ID: \(deviceID)\nModel: \(model)\nManufacturer: \(manufacturer)\nCloud health: \(health)\nBattery: \(battery)\n\nAvailable API data: device identity/label, model metadata, capability status, health and timestamps. Location and precise battery percentage are not exposed unless Samsung includes those capabilities for this tag.")
+        }
     }
 
     private func extractBattery(from text: String) -> String? {
