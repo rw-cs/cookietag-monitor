@@ -5,7 +5,7 @@ import ServiceManagement
 import UserNotifications
 
 private let samsungFindUUID = CBUUID(string: "FD5A")
-private let scanDuration: TimeInterval = 45
+private let scanDuration: TimeInterval = 90
 private let scheduledHour = 11
 
 final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelegate, UNUserNotificationCenterDelegate {
@@ -175,7 +175,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         DispatchQueue.main.async { [weak self] in
             let alert = NSAlert()
             alert.messageText = "CookieTag Monitor is running"
-            alert.informativeText = "Look for the 🐶 icon near the clock. A 45-second SmartTag2 scan is starting now, and another will run every day at 11:00 AM."
+        alert.informativeText = "Look for the 🐶 icon near the clock. A 90-second SmartTag2 scan is starting now, and another will run every day at 11:00 AM."
             alert.alertStyle = .informational
             alert.addButton(withTitle: "OK")
             NSApp.activate(ignoringOtherApps: true)
@@ -276,7 +276,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             return
         }
         guard !isScanning else {
-            refreshMenu(detail: "A 45-second scan is already running…")
+            refreshMenu(detail: "A 90-second scan is already running…")
             return
         }
         guard central.state == .poweredOn else {
@@ -314,7 +314,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
         scanButton?.title = "Scan Again"
         scanButton?.isEnabled = true
 
-        let credible = sightings.values.filter { $0.count >= 2 }
+        // CoreBluetooth may coalesce repeated non-connectable advertisements,
+        // so one packet with the Samsung Find UUID or exact SmartTag name is
+        // sufficient. Requiring duplicates caused nearby tags to be rejected.
+        let credible = Array(sightings.values)
         if credible.isEmpty {
             saveRecord(CheckRecord(date: Date(), detected: false, batteryRaw: nil, medianRSSI: nil))
             setIcon("exclamationmark.triangle.fill")
@@ -322,7 +325,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, CBCentralManagerDelega
             playWarningSound()
             notify(
                 title: "Check Cookie’s SmartTag2",
-                body: "No Samsung tracker signal was detected during today’s 45-second check. Check the CR2032 battery and keep Cookie near the Mac for another scan."
+                body: "No Samsung tracker signal was detected during today’s 90-second check. Check the CR2032 battery, press CookieTag2’s button once to wake it, and scan again."
             )
             return
         }
